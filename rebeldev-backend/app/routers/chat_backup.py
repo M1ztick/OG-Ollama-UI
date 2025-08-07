@@ -15,6 +15,22 @@ from ..services.ollama import OllamaService
 from ..services.openai import OpenAIService
 from ..services.perplex import PerplexityService
 
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
+from typing import Generator, Dict, Any
+import json
+
+from ..models.schemas import (
+    ChatRequest,
+    ChatResponse,
+    StreamChunk,
+    ModelsResponse,
+    ErrorResponse,
+)
+from ..services.ollama import OllamaService
+from ..services.openai import OpenAIService
+from ..services.perplex import PerplexityService
+
 router = APIRouter()
 
 # Service instances
@@ -22,21 +38,20 @@ ollama_service = OllamaService()
 openai_service = OpenAIService()
 perplexity_service = PerplexityService()
 
+
 def get_service(provider: str):
     """Get the appropriate service based on provider"""
     services = {
         "ollama": ollama_service,
         "openai": openai_service,
-        "perplexity": perplexity_service
+        "perplexity": perplexity_service,
     }
-    
+
     if provider not in services:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Unsupported provider: {provider}"
-        )
-    
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+
     return services[provider]
+
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat_completion(request: ChatRequest):
@@ -48,7 +63,8 @@ async def chat_completion(request: ChatRequest):
         response = await service.chat_completion(request)
         return response
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/chat/stream")
 async def chat_completion_stream(request: ChatRequest):
@@ -57,22 +73,23 @@ async def chat_completion_stream(request: ChatRequest):
     """
     try:
         service = get_service(request.provider)
-        
+
         async def generate_stream():
             async for chunk in service.chat_completion_stream(request):
                 yield f"data: {json.dumps(chunk.dict())}\n\n"
             yield "data: [DONE]\n\n"
-        
+
         return StreamingResponse(
             generate_stream(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-            }
+            },
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/models", response_model=ModelsResponse)
 async def get_available_models(provider: str = "ollama"):
@@ -84,7 +101,8 @@ async def get_available_models(provider: str = "ollama"):
         models = await service.get_models()
         return ModelsResponse(models=models, count=len(models))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/health")
 async def health_check():
@@ -93,32 +111,32 @@ async def health_check():
     """
     try:
         providers = {}
-        
+
         # Check Ollama
         try:
             await ollama_service.health_check()
             providers["ollama"] = True
-        except Exception:
+        except:
             providers["ollama"] = False
-        
+
         # Check OpenAI
         try:
             await openai_service.health_check()
             providers["openai"] = True
-        except Exception:
+        except:
             providers["openai"] = False
-            
+
         # Check Perplexity
         try:
             await perplexity_service.health_check()
             providers["perplexity"] = True
-        except Exception:
+        except:
             providers["perplexity"] = False
-        
+
         return {
             "status": "healthy" if any(providers.values()) else "unhealthy",
-            "providers": providers
+            "providers": providers,
         }
-        
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail=str(e))
