@@ -1,9 +1,13 @@
 {
-  "name": "web-creator",
+  "name": "og-ollama-ui",
   "version": "1.0.0",
+  "description": "A modern React-based UI for Ollama with streaming chat support",
   "scripts": {
     "dev": "node scripts/build.mjs",
-    "build": "node scripts/build.mjs --production"
+    "build": "node scripts/build.mjs --production",
+    "preview": "npx serve dist",
+    "lint": "echo 'Linting would go here'",
+    "clean": "rimraf dist"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.0.1",
