@@ -14,7 +14,6 @@ import {
 } from '../components/ui/dropdown-menu'
 import { useToast } from '../hooks/use-toast'
 
-
 interface Message {
   id: string
   content: string
@@ -29,15 +28,20 @@ interface OllamaModel {
   modified_at: string
 }
 
+const INITIAL_ASSISTANT_MESSAGE: Message = {
+  id: '1',
+  content: "Hello! I'm your Ollama assistant. Send me a message to get started!",
+  role: 'assistant',
+  timestamp: new Date()
+}
+
+const FALLBACK_MODELS: OllamaModel[] = [
+  { name: 'llama3.2', size: 0, modified_at: new Date().toISOString() },
+  { name: 'llama3', size: 0, modified_at: new Date().toISOString() }
+]
+
 export default function HomePage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: "Hello! I'm your Ollama assistant. Send me a message to get started!",
-      role: 'assistant',
-      timestamp: new Date()
-    }
-  ])
+  const [messages, setMessages] = useState<Message[]>([INITIAL_ASSISTANT_MESSAGE])
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [availableModels, setAvailableModels] = useState<OllamaModel[]>([])
@@ -84,10 +88,7 @@ export default function HomePage() {
         variant: 'destructive',
       })
       // Set fallback models if API fails
-      setAvailableModels([
-        { name: 'llama3.2', size: 0, modified_at: new Date().toISOString() },
-        { name: 'llama3', size: 0, modified_at: new Date().toISOString() }
-      ])
+      setAvailableModels(FALLBACK_MODELS)
     } finally {
       setIsLoadingModels(false)
     }
@@ -240,10 +241,8 @@ export default function HomePage() {
   const clearMessages = () => {
     setMessages([
       {
-        id: '1',
+        ...INITIAL_ASSISTANT_MESSAGE,
         content: `Hello! I'm your Ollama assistant running ${selectedModel}. Send me a message to get started!`,
-        role: 'assistant',
-        timestamp: new Date()
       }
     ])
   }
@@ -307,7 +306,7 @@ export default function HomePage() {
                 <Button
                   variant="outline"
                   className="bg-white/10 border-white/20 text-white hover:bg-white/20 min-w-[160px]"
-                  disabled={isLoadingModels}
+                  disabled={isLoadingModels || availableModels.length === 0}
                 >
                   <Zap className="w-4 h-4 mr-2" />
                   {isLoadingModels ? 'Loading...' : selectedModel}
