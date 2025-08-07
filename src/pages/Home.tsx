@@ -12,6 +12,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu'
+import { useToast } from '../hooks/use-toast'
+
 
 interface Message {
   id: string
@@ -43,6 +45,7 @@ export default function HomePage() {
   const [isLoadingModels, setIsLoadingModels] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const { toast } = useToast()
 
   /**
    * Scroll to bottom of messages
@@ -75,6 +78,11 @@ export default function HomePage() {
       }
     } catch (error) {
       console.error('Failed to fetch models:', error)
+      toast({
+        title: 'Failed to fetch models',
+        description: 'Could not connect to Ollama. Please ensure Ollama is running.',
+        variant: 'destructive',
+      })
       // Set fallback models if API fails
       setAvailableModels([
         { name: 'llama3.2', size: 0, modified_at: new Date().toISOString() },
@@ -198,11 +206,14 @@ export default function HomePage() {
       console.error('Error calling Ollama:', error)
       
       if (error instanceof Error && error.name !== 'AbortError') {
-        const errorMessage = `❌ Connection Error: ${error.message}. Is Ollama running with model '${selectedModel}'?`
-        
+        toast({
+          title: 'Ollama Connection Error',
+          description: `Failed to connect to Ollama: ${error.message}. Is Ollama running and is '${selectedModel}' available?`,
+          variant: 'destructive',
+        })
         setMessages(prev => prev.map(msg => 
           msg.id === assistantMessageId 
-            ? { ...msg, content: errorMessage, isStreaming: false }
+            ? { ...msg, content: `❌ Error: ${error.message}`, isStreaming: false } // Still show error in chat for context
             : msg
         ))
       }
