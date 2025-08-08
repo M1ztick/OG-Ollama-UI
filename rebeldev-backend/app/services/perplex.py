@@ -4,11 +4,14 @@ Perplexity service for handling requests to Perplexity API
 
 import aiohttp
 import json
-from typing import List, AsyncGenerator, Optional
+import logging
 from datetime import datetime
+from typing import List, AsyncGenerator, Optional
 
 from ..models.schemas import ChatRequest, ChatResponse, StreamChunk, ModelInfo
 from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class PerplexityService:
@@ -17,6 +20,11 @@ class PerplexityService:
     def __init__(self):
         self.api_key = settings.PERPLEXITY_API_KEY
         self.base_url = "https://api.perplexity.ai"
+        self.session = aiohttp.ClientSession()
+
+    async def close(self):
+        """Gracefully close aiohttp session"""
+        await self.session.close()
 
     async def health_check(self) -> bool:
         """Check if Perplexity API is accessible"""
@@ -24,31 +32,27 @@ class PerplexityService:
             return False
 
         try:
-            # Simple test request to check API accessibility
-            async with aiohttp.ClientSession() as session:
-                headers = {"Authorization": f"Bearer {self.api_key}"}
-                test_payload = {
-                    "model": "llama-3.1-sonar-small-128k-online",
-                    "messages": [{"role": "user", "content": "test"}],
-                    "max_tokens": 1,
-                }
-                async with session.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json=test_payload,
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as response:
-                    return response.status in [
-                        200,
-                        400,
-                    ]  # 400 is also OK, means API is accessible
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            test_payload = {
+                "model": "llama-3.1-sonar-small-128k-online",
+                "messages": [{"role": "user", "content": "test"}],
+                "max_tokens": 1,
+            }
+
+            async with self.session.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=test_payload,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as response:
+                return response.status in [200, 400]
+
         except Exception:
             return False
 
     async def get_models(self) -> List[ModelInfo]:
-        """Get list of available models from Perplexity"""
-        # Perplexity doesn't have a models endpoint, so we return known models
-        models = [
+        """Return static list of known Perplexity models"""
+        return [
             ModelInfo(
                 name="llama-3.1-sonar-small-128k-online",
                 provider="perplexity",
@@ -76,17 +80,14 @@ class PerplexityService:
             ),
         ]
 
-        return models
-
     async def chat_completion(self, request: ChatRequest) -> ChatResponse:
-        """
-        Non-streaming chat completion
-        """
+        """Non-streaming chat completion"""
         if not self.api_key:
             raise Exception("Perplexity API key not configured")
 
         try:
-            messages = self._build_messages(request)
+            logger.info(f"Calling Perplexity model '{request.model}' (stream=False)")
+            messages = self.build_messages(request)
 
             payload = {
                 "model": request.model,
@@ -98,39 +99,36 @@ class PerplexityService:
             if request.max_tokens:
                 payload["max_tokens"] = request.max_tokens
 
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                }
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
 
-                async with session.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=60),
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(
-                            f"Perplexity API error {response.status}: {error_text}"
-                        )
+            async with self.session.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"Perplexity API error {response.status}: {error_text}")
 
-                    data = await response.json()
-                    choice = data["choices"][0]
+                data = await response.json()
+                choice = data["choices"][0]
 
-                    return ChatResponse(
-                        message=choice["message"]["content"],
-                        model=data["model"],
-                        provider="perplexity",
-                        usage=data.get("usage", {}),
-                        metadata={
-                            "finish_reason": choice.get("finish_reason"),
-                            "id": data.get("id"),
-                            "created": data.get("created"),
-                            "citations": data.get("citations", []),
-                        },
-                    )
+                return ChatResponse(
+                    message=choice["message"]["content"],
+                    model=data["model"],
+                    provider="perplexity",
+                    usage=data.get("usage", {}),
+                    metadata={
+                        "finish_reason": choice.get("finish_reason"),
+                        "id": data.get("id"),
+                        "created": data.get("created"),
+                        "citations": data.get("citations", []),
+                    },
+                )
 
         except Exception as e:
             raise Exception(f"Perplexity chat completion failed: {str(e)}")
@@ -138,14 +136,13 @@ class PerplexityService:
     async def chat_completion_stream(
         self, request: ChatRequest
     ) -> AsyncGenerator[StreamChunk, None]:
-        """
-        Streaming chat completion
-        """
+        """Streaming chat completion"""
         if not self.api_key:
             raise Exception("Perplexity API key not configured")
 
         try:
-            messages = self._build_messages(request)
+            logger.info(f"Calling Perplexity model '{request.model}' (stream=True)")
+            messages = self.build_messages(request)
 
             payload = {
                 "model": request.model,
@@ -157,76 +154,64 @@ class PerplexityService:
             if request.max_tokens:
                 payload["max_tokens"] = request.max_tokens
 
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                }
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
 
-                async with session.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=60),
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(
-                            f"Perplexity API error {response.status}: {error_text}"
-                        )
+            async with self.session.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"Perplexity API error {response.status}: {error_text}")
 
-                    # Read streaming response
-                    async for line in response.content:
-                        line_str = line.decode("utf-8").strip()
+                async for line in response.content:
+                    line = line.decode("utf-8").strip()
+                    if not line or not line.startswith("data: "):
+                        continue
 
-                        if line_str.startswith("data: "):
-                            data_str = line_str[6:]  # Remove "data: " prefix
+                    data_str = line.removeprefix("data: ").strip()
 
-                            if data_str == "[DONE]":
-                                yield StreamChunk(content="", done=True)
-                                break
+                    if data_str == "[DONE]":
+                        yield StreamChunk(content="", done=True)
+                        break
 
-                            try:
-                                data = json.loads(data_str)
-                                choice = data["choices"][0]
-                                delta = choice.get("delta", {})
+                    try:
+                        data = json.loads(data_str)
+                        choice = data.get("choices", [{}])[0]
+                        delta = choice.get("delta", {})
 
-                                if "content" in delta:
-                                    chunk = StreamChunk(
-                                        content=delta["content"],
-                                        done=False,
-                                        metadata={
-                                            "model": data.get("model"),
-                                            "id": data.get("id"),
-                                            "finish_reason": choice.get(
-                                                "finish_reason"
-                                            ),
-                                            "citations": data.get("citations", []),
-                                        },
-                                    )
-                                    yield chunk
+                        if "content" in delta:
+                            yield StreamChunk(
+                                content=delta["content"],
+                                done=False,
+                                metadata={
+                                    "model": data.get("model"),
+                                    "id": data.get("id"),
+                                    "finish_reason": choice.get("finish_reason"),
+                                    "citations": data.get("citations", []),
+                                },
+                            )
 
-                            except json.JSONDecodeError:
-                                continue
+                    except json.JSONDecodeError:
+                        continue
 
         except Exception as e:
             raise Exception(f"Perplexity streaming failed: {str(e)}")
 
-    def _build_messages(self, request: ChatRequest) -> List[dict]:
-        """
-        Build Perplexity messages format from chat request
-        """
+    def build_messages(self, request: ChatRequest) -> List[dict]:
+        """Build Perplexity-compatible chat messages"""
         messages = []
 
-        # Add system message if provided
         if request.system_prompt:
             messages.append({"role": "system", "content": request.system_prompt})
 
-        # Add conversation history
         for msg in request.history:
             messages.append({"role": msg.role, "content": msg.content})
 
-        # Add current user message
         messages.append({"role": "user", "content": request.message})
-
         return messages
