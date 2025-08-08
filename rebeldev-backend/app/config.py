@@ -1,37 +1,49 @@
 """
-Configuration settings for the OG-Ollama-UI backend
-Loads settings from environment variables with sensible defaults
+Application configuration for OG-Ollama-UI
+Loads from .env or environment variables
 """
 
 from typing import List, Optional
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-    """Application settings with environment variable support"""
+class AppConfig(BaseSettings):
+    """Environment-aware application settings"""
 
-    # Server settings
+    # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     DEBUG: bool = True
+    ENVIRONMENT: str = "development"  # or "production"
+    LOG_LEVEL: str = "INFO"
 
-    # API Keys (optional - loaded from environment)
-    OPENAI_API_KEY: Optional[str] = None
-    PERPLEXITY_API_KEY: Optional[str] = None
-
-    # Ollama settings
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_TIMEOUT: int = 300  # 5 minutes
-
-    # CORS settings
+    # CORS
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000", "*"]
 
-    # Rate limiting
+    # Auth (optional)
+    REQUIRE_AUTH: bool = False
+    AUTH_TOKEN: Optional[str] = None
+
+    # OpenAI
+    OPENAI_API_KEY: Optional[str] = None
+
+    # Perplexity
+    PERPLEXITY_API_KEY: Optional[str] = None
+
+    # Ollama
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_TIMEOUT: int = 300  # seconds
+
+    # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW: int = 60  # seconds
 
-    model_config = {"env_file": ".env", "case_sensitive": True, "extra": "ignore"}
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"
+    )
 
 
-# Create global settings instance
-settings = Settings()
+# Global config instance
+settings = AppConfig()
