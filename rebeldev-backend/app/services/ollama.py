@@ -12,48 +12,44 @@ from typing import List, AsyncGenerator, Optional
 from ..models.schemas import ChatRequest, ChatResponse, StreamChunk, ModelInfo
 from ..config import settings
 
-# Optional retry support
-# from aiohttp_retry import RetryClient, ExponentialRetry
-
 logger = logging.getLogger(__name__)
 
 
 class OllamaService:
-    """Service for interacting with Ollama API"""
+    """Service for interacting with the Ollama API"""
 
-    def __init__(self):
+    def __init__(self, session: Optional[aiohttp.ClientSession] = None):
         self.base_url = settings.OLLAMA_BASE_URL
         self.timeout = settings.OLLAMA_TIMEOUT
-
-        # Standard aiohttp client
-        self.session = aiohttp.ClientSession()
-
-        # Optional retry logic:
-        # retry_opts = ExponentialRetry(attempts=3)
-        # self.session = RetryClient(client_session=self.session, retry_options=retry_opts)
+        self.session = session or aiohttp.ClientSession()
 
     async def close(self):
         """Gracefully close aiohttp session"""
-        await self.session.close()
+        if not self.session.closed:
+            await self.session.close()
 
     async def health_check(self) -> bool:
-        """Check if Ollama is accessible"""
+        """Check if Ollama API is reachable"""
         try:
             async with self.session.get(
-                f"{self.base_url}/api/tags", timeout=aiohttp.ClientTimeout(total=5)
+                f"{self.base_url}/api/tags",
+                timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 return response.status == 200
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Ollama health check failed: {e}")
             return False
 
     async def get_models(self) -> List[ModelInfo]:
-        """Get list of available models from Ollama"""
+        """Fetch list of models from Ollama"""
         try:
             async with self.session.get(
-                f"{self.base_url}/api/tags", timeout=aiohttp.ClientTimeout(total=10)
+                f"{self.base_url}/api/tags",
+                timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
                 if response.status != 200:
-                    raise Exception(f"Ollama API error: {response.status}")
+                    error_text = await response.text()
+                    raise Exception(f"Ollama API error {response.status}: {error_text}")
 
                 data = await response.json()
                 models = []
@@ -78,12 +74,13 @@ class OllamaService:
                 return models
 
         except Exception as e:
-            raise Exception(f"Failed to fetch Ollama models: {str(e)}")
+            logger.exception("Failed to fetch Ollama models")
+            raise Exception(f"Failed to fetch Ollama models: {str(e)}") from e
 
     async def chat_completion(self, request: ChatRequest) -> ChatResponse:
-        """Non-streaming chat completion"""
+        """Perform a non-streaming chat completion using Ollama"""
         try:
-            logger.info(f"Calling Ollama model '{request.model}' with stream=False")
+            logger.info(f"[Ollama] Requesting non-streamed completion for model '{request.model}'")
 
             prompt = self.build_prompt(request)
             payload = {
@@ -116,8 +113,7 @@ class OllamaService:
                     usage={
                         "prompt_tokens": data.get("prompt_eval_count", 0),
                         "completion_tokens": data.get("eval_count", 0),
-                        "total_tokens": data.get("prompt_eval_count", 0)
-                        + data.get("eval_count", 0),
+                        "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
                     },
                     metadata={
                         "done": data.get("done", False),
@@ -129,14 +125,15 @@ class OllamaService:
                 )
 
         except Exception as e:
-            raise Exception(f"Ollama chat completion failed: {str(e)}")
+            logger.exception("Ollama chat completion failed")
+            raise Exception(f"Ollama chat completion failed: {str(e)}") from e
 
     async def chat_completion_stream(
         self, request: ChatRequest
     ) -> AsyncGenerator[StreamChunk, None]:
-        """Streaming chat completion"""
+        """Perform a streaming chat completion using Ollama"""
         try:
-            logger.info(f"Calling Ollama model '{request.model}' with stream=True")
+            logger.info(f"[Ollama] Requesting streamed completion for model '{request.model}'")
 
             prompt = self.build_prompt(request)
             payload = {
@@ -161,13 +158,13 @@ class OllamaService:
                     raise Exception(f"Ollama API error {response.status}: {error_text}")
 
                 async for line in response.content:
-                    line = line.decode("utf-8").strip()
-                    if not line:
-                        continue
                     try:
+                        line = line.decode("utf-8").strip()
+                        if not line:
+                            continue
                         data = json.loads(line)
 
-                        chunk = StreamChunk(
+                        yield StreamChunk(
                             content=data.get("response", ""),
                             done=data.get("done", False),
                             metadata={
@@ -177,32 +174,33 @@ class OllamaService:
                             },
                         )
 
-                        yield chunk
-
                         if data.get("done"):
                             break
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to decode stream chunk: {line} — {e}")
                         continue
 
         except Exception as e:
-            raise Exception(f"Ollama streaming failed: {str(e)}")
+            logger.exception("Ollama streaming chat completion failed")
+            raise Exception(f"Ollama streaming failed: {str(e)}") from e
 
     def build_prompt(self, request: ChatRequest) -> str:
-        """Build a prompt from the chat history and current message"""
-        prompt_parts = []
+        """Constructs a prompt string based on chat history and the current message."""
+        parts = []
 
         if request.system_prompt:
-            prompt_parts.append(f"System: {request.system_prompt}")
+            parts.append(f"System: {request.system_prompt}")
 
         for msg in request.history:
-            if msg.role == "user":
-                prompt_parts.append(f"Human: {msg.content}")
-            elif msg.role == "assistant":
-                prompt_parts.append(f"Assistant: {msg.content}")
-            elif msg.role == "system":
-                prompt_parts.append(f"System: {msg.content}")
+            role_map = {
+                "user": "Human",
+                "assistant": "Assistant",
+                "system": "System"
+            }
+            role_label = role_map.get(msg.role, msg.role.capitalize())
+            parts.append(f"{role_label}: {msg.content}")
 
-        prompt_parts.append(f"Human: {request.message}")
-        prompt_parts.append("Assistant:")
+        parts.append(f"Human: {request.message}")
+        parts.append("Assistant:")
 
-        return "\n\n".join(prompt_parts)
+        return "\n\n".join(parts)
